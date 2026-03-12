@@ -1,0 +1,11 @@
+.env
+__pycache__/
+*.pyc
+.ipynb_checkpoints/
+*.html
+convert_to_pdf.py
+create_pdf_report.py
+write_nb.py
+Padamata_Ckpt2.md
+capstone_project_code.zip
+RAGTruth/
