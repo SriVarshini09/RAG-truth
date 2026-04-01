@@ -9,16 +9,19 @@ from transformers import AutoTokenizer, AutoModelForSequenceClassification
 MODEL_NAME = "cross-encoder/nli-deberta-v3-large"
 _tokenizer = None
 _model = None
+_device = None
 
 
 def _load_model():
-    global _tokenizer, _model
+    global _tokenizer, _model, _device
     if _tokenizer is None:
-        print(f"[ClaimVerifier] Loading {MODEL_NAME} ...")
+        _device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        print(f"[ClaimVerifier] Loading {MODEL_NAME} on {_device} ...")
         _tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME)
         _model = AutoModelForSequenceClassification.from_pretrained(MODEL_NAME)
+        _model = _model.to(_device)
         _model.eval()
-        print("[ClaimVerifier] Model loaded.")
+        print(f"[ClaimVerifier] Model loaded on {_device}.")
 
 
 def verify_claim(claim: str, reference: str, max_ref_chars: int = 2000) -> dict:
@@ -52,6 +55,7 @@ def verify_claim(claim: str, reference: str, max_ref_chars: int = 2000) -> dict:
         max_length=512,
         padding=True,
     )
+    inputs = {k: v.to(_device) for k, v in inputs.items()}
 
     with torch.no_grad():
         logits = _model(**inputs).logits
@@ -79,12 +83,62 @@ def verify_claim(claim: str, reference: str, max_ref_chars: int = 2000) -> dict:
     }
 
 
-def verify_claims(claims: list, reference: str) -> list:
+def verify_claims(claims: list, reference: str, batch_size: int = 16) -> list:
     """
     Verify a list of claims against the same reference.
+    Uses batched inference on GPU for significant speedup.
     Returns list of verdict dicts.
     """
-    return [verify_claim(claim, reference) for claim in claims]
+    if not claims:
+        return []
+    _load_model()
+
+    ref_truncated = reference[:2000] if reference else ""
+    results = []
+
+    for i in range(0, len(claims), batch_size):
+        batch_claims = claims[i: i + batch_size]
+        if not ref_truncated:
+            for claim in batch_claims:
+                results.append({
+                    "claim": claim, "label": "NEUTRAL",
+                    "confidence": 0.0,
+                    "scores": {"ENTAILMENT": 0.0, "NEUTRAL": 1.0, "CONTRADICTION": 0.0},
+                })
+            continue
+
+        inputs = _tokenizer(
+            [ref_truncated] * len(batch_claims),
+            batch_claims,
+            return_tensors="pt",
+            truncation=True,
+            max_length=512,
+            padding=True,
+        )
+        inputs = {k: v.to(_device) for k, v in inputs.items()}
+
+        with torch.no_grad():
+            logits = _model(**inputs).logits
+
+        probs_batch = torch.softmax(logits, dim=-1).cpu().tolist()
+        label_names = _model.config.id2label
+
+        for claim, probs in zip(batch_claims, probs_batch):
+            label_map = {v.upper(): probs[k] for k, v in label_names.items()}
+            scores = {
+                "ENTAILMENT": round(label_map.get("ENTAILMENT", 0.0), 4),
+                "NEUTRAL": round(label_map.get("NEUTRAL", 0.0), 4),
+                "CONTRADICTION": round(label_map.get("CONTRADICTION", 0.0), 4),
+            }
+            best_label = max(scores, key=scores.__getitem__)
+            results.append({
+                "claim": claim,
+                "label": best_label,
+                "confidence": scores[best_label],
+                "scores": scores,
+            })
+
+    return results
 
 
 if __name__ == "__main__":
