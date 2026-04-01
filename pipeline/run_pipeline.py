@@ -12,7 +12,7 @@ ROOT = Path(__file__).parent.parent
 sys.path.insert(0, str(ROOT))
 
 from agents.claim_extractor import extract_claims
-from agents.claim_verifier import verify_claims
+from agents.gpt_verifier import verify_claims_gpt
 from agents.decision_aggregator import aggregate, format_output
 
 SPLITS_DIR = ROOT / "data" / "splits"
@@ -48,11 +48,13 @@ def run_on_record(record: dict) -> dict:
     if isinstance(reference, dict):
         reference = reference.get("passage", str(reference))
 
-    # Agent 1: Extract atomic claims
-    claims = extract_claims(response)
+    # Agent 1: Extract atomic claims (with task context if available)
+    source_info = record.get("source_info", {})
+    context = source_info.get("question") if isinstance(source_info, dict) else None
+    claims = extract_claims(response, context=context)
 
-    # Agent 2: Verify each claim against source
-    verdicts = verify_claims(claims, str(reference))
+    # Agent 2: Verify each claim against source using GPT-4o-mini
+    verdicts = verify_claims_gpt(claims, str(reference))
 
     # Agent 3: Aggregate verdicts → binary label + spans
     aggregation = aggregate(verdicts, response)

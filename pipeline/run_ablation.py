@@ -2,10 +2,12 @@
 Ablation Study Runner
 Tests 4 configurations to isolate each agent's contribution.
 
-Config A: Claim Extractor only (any claim found = hallucination)
-Config B: NLI on full response (no decomposition, no claims)
-Config C: Agent 1 + Agent 2 without custom rules (raw majority vote)
-Config D: Full pipeline (Agent 1 + 2 + 3 with rules) — same as run_pipeline.py
+Config A: Claim Extractor only (any claim found → hallucination, no verification)
+Config B: NLI on full response only (no claim decomposition) — uses DeBERTa local
+Config C: Claims + GPT Verifier, majority vote (no custom aggregation rules)
+Config D: Full pipeline (claims + GPT verifier + custom rules) — final system
+
+Reuses saved claims/verdicts from v3 file to avoid GPT re-extraction.
 """
 import json
 import sys
@@ -15,12 +17,13 @@ from pathlib import Path
 ROOT = Path(__file__).parent.parent
 sys.path.insert(0, str(ROOT))
 
-from agents.claim_extractor import extract_claims
-from agents.claim_verifier import verify_claims, verify_claim
+from agents.claim_verifier import verify_claim   # DeBERTa, for Config B only
 from agents.decision_aggregator import aggregate, format_output
 
 SPLITS_DIR = ROOT / "data" / "splits"
 RESULTS_DIR = ROOT / "results" / "ablation"
+V3_FILE = ROOT / "results" / "multi_agent_predictions_v3.jsonl"
+FINAL_FILE = ROOT / "results" / "multi_agent_predictions_final.jsonl"
 TEST_FILE = SPLITS_DIR / "test_balanced.jsonl"
 
 
@@ -41,12 +44,30 @@ def save_jsonl(records, path):
             f.write(json.dumps(r, ensure_ascii=False) + "\n")
 
 
+def _load_v3_by_id() -> dict:
+    """Load v3 predictions indexed by record ID for fast lookup."""
+    if not V3_FILE.exists():
+        return {}
+    with open(V3_FILE, "r", encoding="utf-8") as f:
+        return {json.loads(l)["id"]: json.loads(l) for l in f if l.strip()}
+
+
+_V3 = None
+
+
+def _get_v3():
+    global _V3
+    if _V3 is None:
+        _V3 = _load_v3_by_id()
+    return _V3
+
+
 # ─── Config A: Claim Extractor Only ──────────────────────────────────────────
 
 def config_a_claim_only(record: dict) -> dict:
-    """Any extracted claims exist → hallucination (no verification)."""
-    response = record.get("response", "")
-    claims = extract_claims(response)
+    """Use saved claims. Any non-empty claims → hallucination (no verification)."""
+    v3 = _get_v3().get(record["id"], record)
+    claims = v3.get("claims", [])
     pred = claims[:3] if claims else []
     result = dict(record)
     result["ablation_config"] = "A_claim_only"
@@ -58,13 +79,12 @@ def config_a_claim_only(record: dict) -> dict:
 # ─── Config B: NLI on Full Response (no decomposition) ───────────────────────
 
 def config_b_nli_full(record: dict) -> dict:
-    """Run NLI directly on full response vs reference — no claim extraction."""
+    """DeBERTa NLI on full response truncated to 500 chars — no claim extraction."""
     response = record.get("response", "")
     reference = record.get("reference", "")
     if isinstance(reference, dict):
         reference = reference.get("passage", str(reference))
 
-    # Treat full response as a single "claim"
     verdict = verify_claim(response[:500], str(reference))
     is_hallucinated = verdict["label"] in ("CONTRADICTION", "NEUTRAL")
     pred = [response[:100]] if is_hallucinated else []
@@ -76,23 +96,18 @@ def config_b_nli_full(record: dict) -> dict:
     return result
 
 
-# ─── Config C: A1+A2 No Custom Rules (majority vote) ─────────────────────────
+# ─── Config C: Claims + GPT Verifier, Majority Vote (no custom rules) ────────
 
 def config_c_no_rules(record: dict) -> dict:
-    """Claim extraction + NLI, but simple majority vote (no custom rules)."""
+    """Reuse saved GPT verdicts (v3). Predict hallucination by simple majority vote."""
+    v3 = _get_v3().get(record["id"], record)
+    verdicts = v3.get("verdicts", [])
     response = record.get("response", "")
-    reference = record.get("reference", "")
-    if isinstance(reference, dict):
-        reference = reference.get("passage", str(reference))
-
-    claims = extract_claims(response)
-    verdicts = verify_claims(claims, str(reference))
 
     if not verdicts:
         pred = []
     else:
-        non_entailed = [v for v in verdicts if v["label"] != "ENTAILMENT"]
-        # Simple majority: >50% non-entailed = hallucination
+        non_entailed = [v for v in verdicts if v.get("label") != "ENTAILMENT"]
         if len(non_entailed) / len(verdicts) > 0.5:
             pred = [v["claim"] for v in non_entailed[:3]]
         else:
@@ -100,29 +115,40 @@ def config_c_no_rules(record: dict) -> dict:
 
     result = dict(record)
     result["ablation_config"] = "C_no_rules"
-    result["claims"] = claims
+    result["claims"] = v3.get("claims", [])
     result["verdicts"] = verdicts
     result["pred"] = pred
     return result
 
 
-# ─── Config D: Full Pipeline ─────────────────────────────────────────────────
+# ─── Config D: Full Pipeline (final system) ───────────────────────────────────
 
 def config_d_full(record: dict) -> dict:
-    """Full pipeline — same as run_pipeline.py."""
+    """Reuse final predictions (GPT verifier + bt=0.4 aggregation)."""
+    if FINAL_FILE.exists():
+        # Load lazily on first use
+        if not hasattr(config_d_full, "_cache"):
+            with open(FINAL_FILE, "r", encoding="utf-8") as f:
+                config_d_full._cache = {json.loads(l)["id"]: json.loads(l)
+                                        for l in f if l.strip()}
+        final_rec = config_d_full._cache.get(record["id"], record)
+        result = dict(record)
+        result["ablation_config"] = "D_full_pipeline"
+        result["claims"] = final_rec.get("claims", [])
+        result["verdicts"] = final_rec.get("verdicts", [])
+        result["aggregation"] = final_rec.get("aggregation", {})
+        result["pred"] = final_rec.get("pred", [])
+        return result
+
+    # Fallback: run fresh (should not be needed if final file exists)
+    v3 = _get_v3().get(record["id"], record)
+    verdicts = v3.get("verdicts", [])
     response = record.get("response", "")
-    reference = record.get("reference", "")
-    if isinstance(reference, dict):
-        reference = reference.get("passage", str(reference))
-
-    claims = extract_claims(response)
-    verdicts = verify_claims(claims, str(reference))
-    aggregation = aggregate(verdicts, response)
+    aggregation = aggregate(verdicts, response, neutral_threshold=0.4)
     output = format_output(aggregation)
-
     result = dict(record)
     result["ablation_config"] = "D_full_pipeline"
-    result["claims"] = claims
+    result["claims"] = v3.get("claims", [])
     result["verdicts"] = verdicts
     result["aggregation"] = aggregation
     result["pred"] = output["hallucination list"]

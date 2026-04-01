@@ -18,7 +18,7 @@ from evaluation.metrics import full_evaluation_report
 from logs.experiment_logger import ExperimentLogger
 
 RESULTS_DIR = ROOT / "results"
-PREDICTIONS_FILE = RESULTS_DIR / "multi_agent_predictions.jsonl"
+PREDICTIONS_FILE = RESULTS_DIR / "multi_agent_predictions_final.jsonl"
 GPT_PREDICTIONS_FILE = RESULTS_DIR / "gpt_baseline_predictions.jsonl"
 
 
@@ -49,7 +49,7 @@ def main():
     # ─── Full evaluation ───────────────────────────────────────────────────
     print("\nRunning full evaluation (bootstrap CI takes ~10s)...")
     t0 = time.time()
-    report = full_evaluation_report(ma_preds, method_name="Multi-Agent Pipeline (GPT-4o-mini + DeBERTa)")
+    report = full_evaluation_report(ma_preds, method_name="Multi-Agent Pipeline (GPT-4o-mini + GPT-4o-mini Verifier)")
     elapsed = time.time() - t0
 
     cl = report["case_level"]
@@ -132,7 +132,7 @@ def main():
     # ─── Log to experiment logger ──────────────────────────────────────────
     logger = ExperimentLogger()
     logger.log_run(
-        method="Multi-Agent Pipeline (GPT-4o-mini + DeBERTa)",
+        method="Multi-Agent Pipeline (GPT-4o-mini + GPT-4o-mini Verifier)",
         metrics={
             "n_samples": len(ma_preds),
             "overall_f1": cl["f1"],
@@ -147,14 +147,14 @@ def main():
             "bootstrap_ci": ci,
         },
         config={
-            "model_gpt": "gpt-4o-mini",
-            "model_nli": "cross-encoder/nli-deberta-v3-large",
-            "neutral_threshold": 0.5,
-            "batch_size": 16,
+            "model_extractor": "gpt-4o-mini",
+            "model_verifier": "gpt-4o-mini",
+            "baseless_threshold": 0.4,
+            "workers": 8,
             "seed": 42,
         },
         predictions_file=str(PREDICTIONS_FILE),
-        notes="Full 600-sample balanced test set run on RTX 5070",
+        notes="GPT verifier (batched, 8 workers), bt=0.4, 600-sample balanced test",
     )
 
     print("\n[Logger] Run logged to logs/summary.csv")

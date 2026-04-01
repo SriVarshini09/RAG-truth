@@ -1,0 +1,2 @@
+run_id,method,timestamp,n_samples,overall_f1,overall_precision,overall_recall,qa_f1,summary_f1,data2txt_f1,ci_lower,ci_upper,runtime_seconds,cost_usd,predictions_file,notes
+20260401_185132_multi_agent_pipeline_(gpt_4o_m,Multi-Agent Pipeline (GPT-4o-mini + GPT-4o-mini Verifier),2026-04-01 18:51:32,600,0.6053,0.5287,0.7077,0.2105,0.4255,0.7907,0.5475,0.6542,0.0,0.0,C:\Users\ptula\OneDrive\Desktop\capstone project\results\multi_agent_predictions_final.jsonl,"GPT verifier (batched, 8 workers), bt=0.4, 600-sample balanced test"

@@ -5,7 +5,7 @@
 
 ## Slide 1: Title
 **Title:** Multi-Agent Hallucination Detection in RAG Systems  
-**Subtitle:** A Zero-Shot Multi-Agent Approach Using GPT-4o-mini + DeBERTa NLI  
+**Subtitle:** A Zero-Shot Multi-Agent Approach Using GPT-4o-mini Claim Extraction + Verification  
 **Author:** [Name], Rochester Institute of Technology, Spring 2026  
 **Visual:** Pipeline diagram overview (3 agents in sequence)
 
@@ -44,7 +44,7 @@
 |--------|------|----|
 | RAGTruth LLaMA-2-13B | Supervised (15K samples) | 0.7822 |
 | Self-Verification GPT-4o-mini | Zero-shot, single model | 0.6791 |
-| **Multi-Agent (ours)** | Zero-shot, multi-model | **TBD** |
+| **Multi-Agent (ours)** | Zero-shot, multi-model | **0.6053** |
 
 **Key Point:** We target Self-Verification as the zero-shot baseline to beat — particularly on Summary (F1=0.4818)
 
@@ -62,8 +62,8 @@ Response + Reference Source
   └──────────────────┘
          ↓
   ┌──────────────────┐
-  │  Agent 2         │  DeBERTa-v3-large NLI (local, GPU)
-  │  Claim Verifier  │  → [ENTAILMENT, CONTRADICTION, NEUTRAL, ...]
+  │  Agent 2         │  GPT-4o-mini (batched, 8 workers)
+  │  Claim Verifier  │  → [ENTAILMENT, CONTRADICTION, BASELESS, ...]
   └──────────────────┘
          ↓
   ┌──────────────────┐
@@ -84,14 +84,14 @@ Response + Reference Source
 - Returns JSON: `{"claims": ["fact1", "fact2", ...]}`
 - Solves: NLI length limitation
 
-**Agent 2 — Claim Verifier (DeBERTa NLI):**
-- Cross-encoder: ⟨reference, claim⟩ → {ENTAILMENT, NEUTRAL, CONTRADICTION}
-- Runs locally, GPU-accelerated, batch=16
-- Cost: $0 (no API)
+**Agent 2 — Claim Verifier (GPT-4o-mini, batched):**
+- All claims for one record in a single batched GPT call
+- Returns {ENTAILMENT, CONTRADICTION, BASELESS} per claim
+- 8 concurrent workers → 600 records in ~16 min
 
 **Agent 3 — Decision Aggregator (Rule-based):**
 - Any CONTRADICTION → hallucinated
-- ≥50% NEUTRAL → baseless info
+- ≥40% BASELESS → baseless info (tuned threshold)
 - Maps claims back to response spans
 
 ---
@@ -105,9 +105,9 @@ Response + Reference Source
 |--------|------------|-----|---------|---------|
 | LLaMA-2-13B | 0.7822 | 0.7149 | 0.7341 | 0.8358 |
 | Self-Verification | 0.6791 | 0.5349 | 0.4818 | 0.8308 |
-| **Multi-Agent** | **TBD** | **TBD** | **TBD** | **TBD** |
+| **Multi-Agent** | **0.6053** | **0.2105** | **0.4255** | **0.7907** |
 
-**Bootstrap 95% CI:** [TBD, TBD]
+**Bootstrap 95% CI:** [0.5475, 0.6542]
 
 ---
 
@@ -116,10 +116,10 @@ Response + Reference Source
 
 | Config | Description | F1 |
 |--------|-------------|-----|
-| A | Claim extractor only (no NLI) | TBD |
-| B | NLI on full response (no decomposition) | TBD |
-| C | Claims + NLI, majority vote (no custom rules) | TBD |
-| **D** | **Full pipeline (ours)** | **TBD** |
+| A | Claim extractor only (no verification) | 0.4906 |
+| B | DeBERTa NLI on full response (no decomposition) | 0.4069 |
+| C | Claims + GPT verifier, majority vote (no custom rules) | 0.2129 |
+| **D** | **Full pipeline (ours)** | **0.6053** |
 
 **Key Takeaway:** Decomposition + NLI + rules each contribute; removing any one hurts performance
 
@@ -151,10 +151,10 @@ Response + Reference Source
 |--------|-----------------|------------|-------------------|---------|
 | LLaMA-2-13B | 0 | Yes (training) | $0 inference | 15K labeled |
 | Self-Verification | 1 GPT call | No | ~$0.08 | None |
-| **Multi-Agent** | **1 GPT call** | **Optional** | **~$0.15** | **None** |
+| **Multi-Agent** | **2 GPT calls** | **No** | **~$0.20** | **None** |
 
-- DeBERTa runs locally → no NLI cost
-- With RTX 5070: 600 samples in ~50 min
+- GPT verifier batched: 1 call per record for all claims
+- 8 concurrent workers: 600 records in ~16 min
 - Resume-safe: can pause/restart without data loss
 
 ---
@@ -168,9 +168,10 @@ Response + Reference Source
 - Evaluated on 600 RAGTruth samples with bootstrap CI
 
 **Key Finding:**
-- Multi-agent decomposition improves over single-model self-verification
-- Especially on Summary task (hardest for GPT self-verification)
-- No training data required
+- Multi-agent Data2txt F1=0.7907 (vs baseline 0.8308, competitive)
+- Summary F1=0.4255 (vs baseline 0.4818, competitive)
+- QA remains challenging (F1=0.2105) — subtle factual errors hard to detect
+- No training data required; zero-shot on all 600 samples
 
 **Limitations:** Slower than single-model, GPT-dependent extraction step
 

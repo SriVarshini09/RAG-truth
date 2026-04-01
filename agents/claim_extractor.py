@@ -23,17 +23,23 @@ SYSTEM_PROMPT = (
 
 EXTRACTION_TEMPLATE = (
     "Decompose the following response into atomic factual claims.\n\n"
+    "{context_block}"
     "Response:\n{response}\n\n"
     "Return JSON: {{\"claims\": [\"claim1\", \"claim2\", ...]}}"
 )
 
 
-def extract_claims(response: str, max_retries: int = 3) -> list:
+def extract_claims(response: str, context: str = None, max_retries: int = 3) -> list:
     """
     Extract atomic claims from a response string.
+    context: optional question/task string to ground the claims.
     Returns list of claim strings.
     """
-    prompt = EXTRACTION_TEMPLATE.format(response=response[:3000])
+    context_block = f"Context/Question:\n{context}\n\n" if context else ""
+    prompt = EXTRACTION_TEMPLATE.format(
+        response=response[:3000],
+        context_block=context_block,
+    )
 
     for attempt in range(max_retries):
         try:
@@ -70,7 +76,8 @@ def extract_claims_for_record(record: dict) -> dict:
     Returns record enriched with 'claims' field.
     """
     response = record.get("response", "")
-    claims = extract_claims(response)
+    context = record.get("source_info", {}).get("question") if isinstance(record.get("source_info"), dict) else None
+    claims = extract_claims(response, context=context)
     return {**record, "claims": claims}
 
 

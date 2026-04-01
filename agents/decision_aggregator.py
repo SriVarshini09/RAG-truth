@@ -9,16 +9,20 @@ def aggregate(claims_with_verdicts: list, response: str, neutral_threshold: floa
     """
     Decide if a response is hallucinated based on claim verdicts.
 
+    Supports two verifier backends:
+      - DeBERTa labels: ENTAILMENT | NEUTRAL | CONTRADICTION
+      - GPT labels:     ENTAILMENT | BASELESS | CONTRADICTION
+
     Rules:
       - Any CONTRADICTION  → hallucination = True
-      - >= neutral_threshold fraction NEUTRAL → hallucination = True (baseless info)
+      - >= neutral_threshold fraction NEUTRAL or BASELESS → hallucination = True
       - All ENTAILMENT     → hallucination = False
 
     Returns:
         {
             "hallucination": bool,
             "hallucination_list": [str, ...],   # text spans found in response
-            "verdict_counts": {"ENTAILMENT": int, "NEUTRAL": int, "CONTRADICTION": int},
+            "verdict_counts": {"ENTAILMENT": int, "NEUTRAL": int, "CONTRADICTION": int, "BASELESS": int},
             "reason": str
         }
     """
@@ -26,11 +30,11 @@ def aggregate(claims_with_verdicts: list, response: str, neutral_threshold: floa
         return {
             "hallucination": False,
             "hallucination_list": [],
-            "verdict_counts": {"ENTAILMENT": 0, "NEUTRAL": 0, "CONTRADICTION": 0},
+            "verdict_counts": {"ENTAILMENT": 0, "NEUTRAL": 0, "CONTRADICTION": 0, "BASELESS": 0},
             "reason": "no_claims",
         }
 
-    counts = {"ENTAILMENT": 0, "NEUTRAL": 0, "CONTRADICTION": 0}
+    counts = {"ENTAILMENT": 0, "NEUTRAL": 0, "CONTRADICTION": 0, "BASELESS": 0}
     for v in claims_with_verdicts:
         label = v.get("label", "NEUTRAL")
         counts[label] = counts.get(label, 0) + 1
@@ -46,11 +50,14 @@ def aggregate(claims_with_verdicts: list, response: str, neutral_threshold: floa
         ]
         reason = "contradiction_found"
 
-    # Rule 2: too many neutral (baseless info)
-    neutral_rate = counts["NEUTRAL"] / total if total > 0 else 0
-    if neutral_rate >= neutral_threshold and not hallucinated_claims:
+    # Rule 2: too many neutral/baseless (unsupported info)
+    # Treat BASELESS (GPT) and NEUTRAL (DeBERTa) the same way
+    unsupported = counts["NEUTRAL"] + counts["BASELESS"]
+    unsupported_rate = unsupported / total if total > 0 else 0
+    if unsupported_rate >= neutral_threshold and not hallucinated_claims:
         hallucinated_claims = [
-            v["claim"] for v in claims_with_verdicts if v.get("label") == "NEUTRAL"
+            v["claim"] for v in claims_with_verdicts
+            if v.get("label") in ("NEUTRAL", "BASELESS")
         ]
         reason = "baseless_info"
 
