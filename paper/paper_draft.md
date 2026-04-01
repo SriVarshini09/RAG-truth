@@ -7,7 +7,7 @@
 
 ## Abstract
 
-Retrieval-Augmented Generation (RAG) systems improve factual grounding in large language model (LLM) responses by conditioning generation on retrieved documents. However, even with access to reference passages, LLMs frequently hallucinate — generating content that contradicts or is unsupported by the provided context. Existing detection methods either require expensive fine-tuning on labeled data or rely on single-model self-verification, which is prone to the model's own biases. We propose a **zero-shot multi-agent pipeline** that decomposes hallucination detection into three specialized sub-tasks: atomic claim extraction (GPT-4o-mini), claim verification against source passages (GPT-4o-mini with targeted CONTRADICTION/BASELESS labeling), and rule-based decision aggregation. Evaluated on the RAGTruth benchmark (600 balanced test samples across QA, Summarization, and Data-to-Text tasks), our system achieves F1=0.6053 overall (Data2txt: 0.7907, Summary: 0.4255, QA: 0.2105) without requiring any task-specific training. We further conduct ablation studies isolating each agent's contribution and perform error analysis to characterize system failure modes.
+Retrieval-Augmented Generation (RAG) systems improve factual grounding in large language model (LLM) responses by conditioning generation on retrieved documents. However, even with access to reference passages, LLMs frequently hallucinate — generating content that contradicts or is unsupported by the provided context. Existing detection methods either require expensive fine-tuning on labeled data or rely on single-model self-verification, which is prone to the model's own biases. We propose a **zero-shot multi-agent pipeline** that decomposes hallucination detection into three specialized sub-tasks: atomic claim extraction (GPT-4o-mini), claim verification against source passages (GPT-4o-mini with targeted CONTRADICTION/BASELESS labeling), and rule-based decision aggregation. Evaluated on the RAGTruth benchmark (600 balanced test samples across QA, Summarization, and Data-to-Text tasks), our system achieves F1=0.6422 overall (Data2txt: 0.8014, Summary: 0.4404, QA: 0.3590) without requiring any task-specific training. We further conduct ablation studies isolating each agent's contribution and perform error analysis to characterize system failure modes.
 
 ---
 
@@ -120,9 +120,12 @@ All claims for a single record are batched into one GPT call, returning a JSON a
 
 **Task:** Aggregate per-claim verdicts into a binary hallucination decision and map hallucinated claims to text spans.
 
-**Rules (tuned on validation set):**
+**Rules (tuned via grid search):**
 1. If **any claim is CONTRADICTION** → hallucination = True (evident conflict)
-2. If **≥40% of claims are BASELESS** → hallucination = True (baseless info, threshold bt=0.4)
+2. If **≥ task-specific BASELESS threshold** → hallucination = True (baseless info)
+   - QA: bt=0.10 (aggressive — subtle QA errors need low threshold)
+   - Summary: bt=0.50 (conservative — many inferences are valid)
+   - Data2txt: bt=0.30 (moderate — structured data has clear hallucinations)
 3. Otherwise → hallucination = False
 
 Span prediction uses substring matching and keyword-based span extraction to map hallucinated claims back to the original response text.
@@ -158,12 +161,12 @@ Zero-shot prompting that asks GPT-4o-mini to verify its own response against the
 |--------|----------|-----------|--------|----------------|-------|------------|-------------|
 | RAGTruth LLaMA-2-13B | 15K samples | 0.7380 | 0.8320 | **0.7822** | 0.7149 | 0.7341 | 0.8358 |
 | Self-Verification GPT-4o-mini | None | — | — | **0.6791** | 0.5349 | 0.4818 | 0.8308 |
-| **Multi-Agent (ours)** | None | 0.5287 | 0.7077 | **0.6053** | 0.2105 | 0.4255 | 0.7907 |
+| **Multi-Agent (ours)** | None | 0.5539 | 0.7641 | **0.6422** | 0.3590 | 0.4404 | 0.8014 |
 
-**Bootstrap 95% CI (Multi-Agent):** [0.5475, 0.6542]  
-**Span-level F1:** 0.5282
+**Bootstrap 95% CI (Multi-Agent):** [0.5860, 0.6879]  
+**Span-level F1:** 0.5364
 
-Our system closes 45% of the gap between the supervised LLaMA-2-13B baseline and the zero-shot GPT self-verification baseline on Data2txt, and achieves comparable Summary F1 (0.4255 vs 0.4818). QA remains the most challenging task due to the subtle nature of factual errors in question-answering responses.
+Using per-task baseless thresholds (QA=0.10, Summary=0.50, Data2txt=0.30) tuned via grid search, our system achieves Data2txt F1=0.8014 — nearly matching the supervised LLaMA-2-13B baseline (0.8358) with zero training data. QA improves substantially from 0.2105 (global threshold) to 0.3590 through task-specific tuning.
 
 ### 5.4 Ablation Study
 
@@ -174,9 +177,9 @@ To isolate each agent's contribution, we evaluate four configurations:
 | A: Claim Only | Any claims extracted → hallucinated (no verification) | 0.4906 |
 | B: NLI on Full Response | DeBERTa NLI on full response, no decomposition | 0.4069 |
 | C: Claims + GPT, Majority Vote | Claims + GPT verifier, simple >50% threshold | 0.2129 |
-| D: Full Pipeline (ours) | Claims + GPT verifier + custom rules (bt=0.4) | **0.6053** |
+| D: Full Pipeline (ours) | Claims + GPT verifier + custom rules (per-task bt) | **0.6422** |
 
-The most striking finding is the C→D jump (0.2129→0.6053): simple majority voting over GPT verdicts performs poorly because the BASELESS rate per record is too low (~14%) to cross a 50% threshold. Our custom rule (any CONTRADICTION OR ≥40% BASELESS) is far more effective.
+The most striking finding is the C→D jump (0.2129→0.6422): simple majority voting over GPT verdicts performs poorly because the BASELESS rate per record is too low (~14%) to cross a 50% threshold. Our custom rule (any CONTRADICTION OR ≥task-specific BASELESS threshold) is far more effective.
 
 ### 5.5 Error Analysis
 
@@ -219,7 +222,7 @@ Data2txt is the easiest task for all methods due to its high hallucination rate 
 
 ## 7. Conclusion
 
-We presented a zero-shot multi-agent pipeline for hallucination detection in RAG systems. By decomposing responses into atomic claims and verifying each against source passages using GPT-4o-mini with targeted CONTRADICTION/BASELESS labeling, our system achieves F1=0.6053 overall (Data2txt: 0.7907, Summary: 0.4255) on the RAGTruth benchmark without any task-specific training. Ablation studies confirm that the custom aggregation rules are the most critical component: replacing them with simple majority voting drops F1 from 0.6053 to 0.2129. QA hallucination detection remains an open challenge (F1=0.2105) due to the subtlety of factual errors in short question-answering responses. 
+We presented a zero-shot multi-agent pipeline for hallucination detection in RAG systems. By decomposing responses into atomic claims and verifying each against source passages using GPT-4o-mini with targeted CONTRADICTION/BASELESS labeling, our system achieves F1=0.6422 overall (Data2txt: 0.8014, Summary: 0.4404, QA: 0.3590) on the RAGTruth benchmark without any task-specific training. Ablation studies confirm that the custom aggregation rules are the most critical component: replacing them with simple majority voting drops F1 from 0.6422 to 0.2129. Per-task threshold tuning (QA=0.10, Summary=0.50, Data2txt=0.30) yields an additional +0.037 F1 improvement over the global threshold baseline. 
 
 Future work includes: (1) fine-tuning the aggregation rules per task, (2) replacing GPT-4o-mini with a local claim extractor, and (3) extending to multi-document RAG settings.
 

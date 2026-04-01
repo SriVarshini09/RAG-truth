@@ -44,7 +44,7 @@
 |--------|------|----|
 | RAGTruth LLaMA-2-13B | Supervised (15K samples) | 0.7822 |
 | Self-Verification GPT-4o-mini | Zero-shot, single model | 0.6791 |
-| **Multi-Agent (ours)** | Zero-shot, multi-model | **0.6053** |
+| **Multi-Agent (ours)** | Zero-shot, multi-model | **0.6422** |
 
 **Key Point:** We target Self-Verification as the zero-shot baseline to beat — particularly on Summary (F1=0.4818)
 
@@ -91,7 +91,7 @@ Response + Reference Source
 
 **Agent 3 — Decision Aggregator (Rule-based):**
 - Any CONTRADICTION → hallucinated
-- ≥40% BASELESS → baseless info (tuned threshold)
+- Per-task BASELESS threshold (QA=10%, Sum=50%, D2T=30%)
 - Maps claims back to response spans
 
 ---
@@ -105,9 +105,9 @@ Response + Reference Source
 |--------|------------|-----|---------|---------|
 | LLaMA-2-13B | 0.7822 | 0.7149 | 0.7341 | 0.8358 |
 | Self-Verification | 0.6791 | 0.5349 | 0.4818 | 0.8308 |
-| **Multi-Agent** | **0.6053** | **0.2105** | **0.4255** | **0.7907** |
+| **Multi-Agent** | **0.6422** | **0.3590** | **0.4404** | **0.8014** |
 
-**Bootstrap 95% CI:** [0.5475, 0.6542]
+**Bootstrap 95% CI:** [0.5860, 0.6879]
 
 ---
 
@@ -119,7 +119,7 @@ Response + Reference Source
 | A | Claim extractor only (no verification) | 0.4906 |
 | B | DeBERTa NLI on full response (no decomposition) | 0.4069 |
 | C | Claims + GPT verifier, majority vote (no custom rules) | 0.2129 |
-| **D** | **Full pipeline (ours)** | **0.6053** |
+| **D** | **Full pipeline (ours, per-task bt)** | **0.6422** |
 
 **Key Takeaway:** Decomposition + NLI + rules each contribute; removing any one hurts performance
 
@@ -168,9 +168,9 @@ Response + Reference Source
 - Evaluated on 600 RAGTruth samples with bootstrap CI
 
 **Key Finding:**
-- Multi-agent Data2txt F1=0.7907 (vs baseline 0.8308, competitive)
-- Summary F1=0.4255 (vs baseline 0.4818, competitive)
-- QA remains challenging (F1=0.2105) — subtle factual errors hard to detect
+- Multi-agent Data2txt F1=**0.8014** (vs supervised 0.8358, near-competitive)
+- Summary F1=0.4404 (vs baseline 0.4818)
+- QA F1=0.3590 (improved from 0.21 via per-task tuning)
 - No training data required; zero-shot on all 600 samples
 
 **Limitations:** Slower than single-model, GPT-dependent extraction step
